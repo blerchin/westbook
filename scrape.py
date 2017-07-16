@@ -4,8 +4,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common import exceptions as EX
 from selenium.webdriver.common.keys import Keys
+from bs4 import BeautifulSoup
 from time import sleep
-import csv
+import urllib
+import json
+    
+redirectdriver = webdriver.Firefox()
+
+with open(".config") as f:
+    config = json.loads(f.read())
 
 users = {}
 with open(".credentials") as f:
@@ -24,7 +31,7 @@ def get_source(el):
     except EX.NoSuchElementException:
         return False
 
-def get_lede(el):
+def get_deck(el):
     try:
         return el.find_element_by_tag_name("p").text
     except EX.NoSuchElementException:
@@ -36,18 +43,45 @@ def get_headline(el):
     except EX.NoSuchElementException:
         return False
 
+def get_content(link):
+    params = urllib.parse.urlencode({ "url": link })
+    req = urllib.request.Request("https://mercury.postlight.com/parser?%s"
+            % params)
+    req.add_header("x-api-key", config['MERCURY_API_KEY'])
+    data = json.loads(urllib.request.urlopen(req).read())
+    soup = BeautifulSoup(data["content"], "html.parser")
+    return soup.get_text()
+
 def get_id(el):
     return el.get_attribute("id")
 
 def get_link(el):
+    fblink = False
     try:
         link = el.find_element_by_css_selector(".mtm a").get_attribute("href")
         if link[0] == "/":
-            return "https://facebook.com" + link
+            fblink = "https://facebook.com" + link
         else:
-            return link
+            fblink = link
     except EX.NoSuchElementException:
         return False
+
+    redirectdriver.get(fblink)
+    wait = WebDriverWait(redirectdriver, 5)
+    body = driver.find_element_by_tag_name('body')
+    try:
+        body = wait.until(EC.staleness_of(body))
+    except:
+        EX.TimeoutException
+    url = redirectdriver.current_url
+    params = urllib.parse.urlencode({ 
+        "apiKey": config['BITLY_API_KEY'],
+        "login": config['BITLY_LOGIN'], 
+        "longUrl": url
+        })
+    req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
+    return json.loads(req.read())["data"]["url"]
+
 def get_image(el):
     try:
         return el.find_element_by_css_selector(".mtm img").get_attribute("src")
@@ -59,13 +93,15 @@ def get_image(el):
         return False
 
 def get_story(el):
+    link = get_link(el)
     ret = {
         "headline": get_headline(el),
         "id": get_id(el),
         "image": get_image(el),
-        "lede": get_lede(el),
-        "link": get_link(el),
-        "source": get_source(el)
+        "deck": get_deck(el),
+        "link": link,
+        "source": get_source(el),
+        "story": link and get_content(link)
     }
     return ret;
 
@@ -82,22 +118,19 @@ for user, password in users.items():
     
     story_els = []
     stories = []
-    while len(stories) < 20: 
+    while len(stories) < 20:
         sleep(1)
         story_els = driver.find_elements_by_css_selector("[data-testid=fbfeed_story]")
         driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight);")
         for el in story_els:
-            story = get_story(el)
-            if story["source"] not in [x["source"] for x in stories]:
+            if get_source(el) not in [x["source"] for x in stories]:
+                story = get_story(el)
                 stories.append(story)
                 print(story)
-    with open(user + '.csv', 'w') as f:
-        writer = csv.DictWriter(f, stories[0].keys())
-        writer.writeheader()
-        for story in stories:
-            writer.writerow(story)
-
-driver.close()
+    with open(user + '.json', 'w') as f:
+        f.write(json.dumps(stories))
 
 
+    driver.close()
 
+redirectdriver.close()
