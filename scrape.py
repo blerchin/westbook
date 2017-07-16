@@ -5,9 +5,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common import exceptions as EX
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
-from time import sleep
+import time
 import urllib
 import json
+import re
+import os
     
 redirectdriver = webdriver.Firefox()
 
@@ -48,9 +50,14 @@ def get_content(link):
     req = urllib.request.Request("https://mercury.postlight.com/parser?%s"
             % params)
     req.add_header("x-api-key", config['MERCURY_API_KEY'])
-    data = json.loads(urllib.request.urlopen(req).read())
+    try:
+        data = json.loads(urllib.request.urlopen(req).read())
+    except urllib.error.HTTPError:
+        return False
     soup = BeautifulSoup(data["content"], "html.parser")
-    return soup.get_text()
+    content = soup.get_text().strip()
+    content = re.sub(r'\n\s*\n', r'\n\n', content,flags=re.M)
+    return content
 
 def get_id(el):
     return el.get_attribute("id")
@@ -84,7 +91,10 @@ def get_link(el):
 
 def get_image(el):
     try:
-        return el.find_element_by_css_selector(".mtm img").get_attribute("src")
+        src = el.find_element_by_css_selector(".mtm img").get_attribute("src")
+        loc = "%s/img/%s.jpg" % (os.getcwd(), time.time())
+        urllib.request.urlretrieve(src, loc)
+        return loc
     except EX.NoSuchElementException:
         pass
     try:
@@ -119,11 +129,11 @@ for user, password in users.items():
     story_els = []
     stories = []
     while len(stories) < 20:
-        sleep(1)
+        time.sleep(1)
         story_els = driver.find_elements_by_css_selector("[data-testid=fbfeed_story]")
         driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight);")
         for el in story_els:
-            if get_source(el) not in [x["source"] for x in stories]:
+            if get_id(el) not in [x["id"] for x in stories]:
                 story = get_story(el)
                 stories.append(story)
                 print(story)
