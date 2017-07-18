@@ -73,17 +73,18 @@ def get_link(el):
     return fblink
 
 def resolve_link(story, driver):
-    driver.get(story['link'])
-    time.sleep(2)
-    url = driver.current_url
-    story['orig_link'] = url
-    params = urllib.parse.urlencode({
-        "apiKey": config['BITLY_API_KEY'],
-        "login": config['BITLY_LOGIN'],
-        "longUrl": url
-        })
-    req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
-    story['link'] = json.loads(req.read())["data"]["url"]
+    if(story['link'] and len(story['link']) > 0):
+        driver.get(story['link'])
+        time.sleep(2)
+        url = driver.current_url
+        story['orig_link'] = url
+        params = urllib.parse.urlencode({
+            "apiKey": config['BITLY_API_KEY'],
+            "login": config['BITLY_LOGIN'],
+            "longUrl": url
+            })
+        req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
+        story['link'] = json.loads(req.read())["data"]["url"]
 
 def get_image(el):
     try:
@@ -115,12 +116,12 @@ driver = False;
 def get_content(story):
     try:
         resolve_link(story, driver)
+        if(story['orig_link']):
+            article = get_article(story['orig_link'])
+            story['story'] =  article and article['content']
+        return story
     except Exception as e:
         print(e)
-    if(story['orig_link']):
-        article = get_article(story['orig_link'])
-        story['story'] =  article and article['content']
-    return story
 
 for user, password in users.items():
     driver = webdriver.Firefox()
@@ -136,12 +137,13 @@ for user, password in users.items():
 
     story_els = []
     stories = []
-    while len(stories) < 50:
-        time.sleep(1)
+    while len(stories) < 150:
+        time.sleep(.1)
         story_els = driver.find_elements_by_css_selector("[data-testid=fbfeed_story]")
         driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight);")
+        ids = [x["id"] for x in stories]
         for el in story_els:
-            if get_id(el) not in [x["id"] for x in stories]:
+            if get_id(el) not in ids:
                 print("new story")
                 story = get_story(el)
                 stories.append(story)
