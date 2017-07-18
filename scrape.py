@@ -5,21 +5,22 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common import exceptions as EX
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
+import logging
 import time
 import urllib
 import json
 import re
 import os
+import sys
 
 with open(".config") as f:
     config = json.loads(f.read())
 
-users = {}
+users = []
 with open(".credentials") as f:
     creds = f.readlines()
-    for l in creds:
-        cred = l.strip().split(":")
-        users[cred[0]] = cred[1]
+    for c in creds:
+        users.append(c.strip().split(":"))
 
 def get_source(el):
     try:
@@ -28,12 +29,16 @@ def get_source(el):
         for e in tag.find_elements_by_xpath("./*/*"):
             text += e.text;
         return text
-    except EX.NoSuchElementException:
+    except EX.NoSuchElementException as e:
         return False
 
 def get_deck(el):
     try:
-        return el.find_element_by_tag_name("p").text
+        deck = ""
+        grafs = el.find_elements_by_tag_name("p")
+        for graf in grafs:
+            deck += graf.text
+        return deck;
     except EX.NoSuchElementException:
         return False
 
@@ -44,6 +49,7 @@ def get_headline(el):
         return False
 
 def get_article(link):
+    print("parsing %s" % link)
     if("facebook.com" in link):
         return
     params = urllib.parse.urlencode({ "url": link })
@@ -51,9 +57,9 @@ def get_article(link):
             % params)
     req.add_header("x-api-key", config['MERCURY_API_KEY'])
     data = json.loads(urllib.request.urlopen(req).read())
-    print(data)
     soup = BeautifulSoup(data["content"], "html.parser")
     data['content'] = soup.get_text().strip()
+    print(data['title'])
     return data;
 
 def get_id(el):
@@ -72,19 +78,21 @@ def get_link(el):
 
     return fblink
 
-def resolve_link(story, driver):
-    if(story['link'] and len(story['link']) > 0):
-        driver.get(story['link'])
-        time.sleep(2)
-        url = driver.current_url
-        story['orig_link'] = url
-        params = urllib.parse.urlencode({
-            "apiKey": config['BITLY_API_KEY'],
-            "login": config['BITLY_LOGIN'],
-            "longUrl": url
-            })
-        req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
-        story['link'] = json.loads(req.read())["data"]["url"]
+def resolve_link(story):
+    link = story['link']
+    if(link and len(link) > 0):
+        print("resolving %s" % link)
+        args = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+        if "u" in args:
+            url = args['u'][0]
+            story['orig_link'] = url
+            params = urllib.parse.urlencode({
+                "apiKey": config['BITLY_API_KEY'],
+                "login": config['BITLY_LOGIN'],
+                "longUrl": url
+                })
+            req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
+            story['link'] = json.loads(req.read())["data"]["url"]
 
 def get_image(el):
     try:
@@ -108,28 +116,29 @@ def get_story(el):
         "link": get_link(el),
         "orig_link": False,
         "source": get_source(el),
-        "story": False
     }
     return ret;
 
-driver = False;
 def get_content(story):
     try:
-        resolve_link(story, driver)
+        resolve_link(story)
         if(story['orig_link']):
             article = get_article(story['orig_link'])
             story['story'] =  article and article['content']
         return story
     except Exception as e:
-        print(e)
+        logging.exception(e)
 
-for user, password in users.items():
+def scrape_user(user_num):
+    user = users[user_num]
+    username = user[0]
+    password = user[1]
     driver = webdriver.Firefox()
     driver.get("http://www.facebook.com");
     assert "Facebook" in driver.title
     email_field = driver.find_element_by_name("email")
     email_field.clear()
-    email_field.send_keys(user)
+    email_field.send_keys(username)
     password_field = driver.find_element_by_name("pass")
     password_field.send_keys(password)
     password_field.send_keys(Keys.RETURN)
@@ -137,22 +146,29 @@ for user, password in users.items():
 
     story_els = []
     stories = []
-    while len(stories) < 150:
-        time.sleep(.1)
-        story_els = driver.find_elements_by_css_selector("[data-testid=fbfeed_story]")
-        driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight);")
-        ids = [x["id"] for x in stories]
-        for el in story_els:
-            if get_id(el) not in ids:
-                print("new story")
-                story = get_story(el)
-                stories.append(story)
-                print(story)
+    failures = 0
+    last_pos = 0
+    while len(stories) < 100 and failures < 100:
+        time.sleep(1)
+        try:
+            el = driver.find_element_by_css_selector('[aria-posinset="%i"]' % (last_pos + 1))
+            story = get_story(el)
+            stories.append(story)
+            print(last_pos + 1)
+            print(story['source'])
+            last_pos += 1
+            failures = 0
+        except EX.NoSuchElementException:
+            failures += 1
+            print('retry %i' % failures)
+            driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight/2);")
+            continue
+
     stories = list(map(get_content, stories))
 
-    fname = re.sub('[^a-zA-Z0-9 \n\.]', '_', user)
-    with open(fname + '.json', 'w') as f:
+    with open( "data/%i.json" % user_num, 'w') as f:
         f.write(json.dumps(stories))
 
-
     driver.close()
+
+scrape_user(int(sys.argv[1]))
