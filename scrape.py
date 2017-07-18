@@ -4,7 +4,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common import exceptions as EX
 from selenium.webdriver.common.keys import Keys
+from multiprocessing import Pool
 from bs4 import BeautifulSoup
+import pickle
 import logging
 import time
 import urllib
@@ -15,12 +17,6 @@ import sys
 
 with open(".config") as f:
     config = json.loads(f.read())
-
-users = []
-with open(".credentials") as f:
-    creds = f.readlines()
-    for c in creds:
-        users.append(c.strip().split(":"))
 
 def get_source(el):
     try:
@@ -130,19 +126,16 @@ def get_content(story):
         logging.exception(e)
 
 def scrape_user(user_num):
-    user = users[user_num]
-    username = user[0]
-    password = user[1]
     driver = webdriver.Firefox()
     driver.get("http://www.facebook.com");
-    assert "Facebook" in driver.title
-    email_field = driver.find_element_by_name("email")
-    email_field.clear()
-    email_field.send_keys(username)
-    password_field = driver.find_element_by_name("pass")
-    password_field.send_keys(password)
-    password_field.send_keys(Keys.RETURN)
-    print("logged in");
+    cookies = pickle.load(open("cookies/%i.pkl" % user_num, "rb"))
+    for cookie in cookies:
+        driver.add_cookie(cookie)
+    driver.refresh()
+    element = WebDriverWait(driver, 10).until(EC.title_is("Facebook"))
+    element = driver.find_element_by_css_selector('.homeSideNav li[data-type="type_user"] a .linkWrap')
+    fullname = element.text
+    print("%s logged in" % fullname);
 
     story_els = []
     stories = []
@@ -167,8 +160,10 @@ def scrape_user(user_num):
     stories = list(map(get_content, stories))
 
     with open( "data/%i.json" % user_num, 'w') as f:
-        f.write(json.dumps(stories))
+        f.write(json.dumps({ 'fullname': fullname, 'stories': stories }))
 
     driver.close()
 
-scrape_user(int(sys.argv[1]))
+with Pool(5) as p:
+    users = [int(os.path.splitext(os.path.basename(f))[0]) for f in os.listdir("cookies")]
+    p.map(scrape_user, users)
