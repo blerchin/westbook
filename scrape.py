@@ -10,8 +10,6 @@ import urllib
 import json
 import re
 import os
-    
-redirectdriver = webdriver.Firefox()
 
 with open(".config") as f:
     config = json.loads(f.read())
@@ -45,7 +43,7 @@ def get_headline(el):
     except EX.NoSuchElementException:
         return False
 
-def get_content(link):
+def get_article(link):
     params = urllib.parse.urlencode({ "url": link })
     req = urllib.request.Request("https://mercury.postlight.com/parser?%s"
             % params)
@@ -56,7 +54,7 @@ def get_content(link):
         return False
     soup = BeautifulSoup(data["content"], "html.parser")
     content = soup.get_text().strip()
-    content = re.sub(r'\n\s*\n', r'\n\n', content,flags=re.M)
+    content = re.sub(r'\n\s*\n', r'\r', content,flags=re.M)
     return content
 
 def get_id(el):
@@ -73,17 +71,20 @@ def get_link(el):
     except EX.NoSuchElementException:
         return False
 
-    redirectdriver.get(fblink)
-    wait = WebDriverWait(redirectdriver, 5)
-    body = driver.find_element_by_tag_name('body')
+    return fblink
+
+def resolve_link(fblink, driver):
     try:
+        body = driver.find_element_by_tag_name('body')
+        driver.get(fblink)
+        wait = WebDriverWait(driver, 5)
         body = wait.until(EC.staleness_of(body))
-    except:
-        EX.TimeoutException
-    url = redirectdriver.current_url
-    params = urllib.parse.urlencode({ 
+    except Exception as e:
+        print(e)
+    url = driver.current_url
+    params = urllib.parse.urlencode({
         "apiKey": config['BITLY_API_KEY'],
-        "login": config['BITLY_LOGIN'], 
+        "login": config['BITLY_LOGIN'],
         "longUrl": url
         })
     req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
@@ -103,17 +104,23 @@ def get_image(el):
         return False
 
 def get_story(el):
-    link = get_link(el)
     ret = {
         "headline": get_headline(el),
         "id": get_id(el),
         "image": get_image(el),
         "deck": get_deck(el),
-        "link": link,
-        "source": get_source(el),
-        "story": link and get_content(link)
+        "link": get_link(el),
+        "source": get_source(el)
     }
     return ret;
+
+driver = False;
+def get_content(story):
+    link = resolve_link(story['link'], driver)
+    print(link)
+    story['link'] = link
+    story['story'] = link and get_article(link)
+    return story
 
 for user, password in users.items():
     driver = webdriver.Firefox()
@@ -125,22 +132,25 @@ for user, password in users.items():
     password_field = driver.find_element_by_name("pass")
     password_field.send_keys(password)
     password_field.send_keys(Keys.RETURN)
-    
+    print("logged in");
+
     story_els = []
     stories = []
-    while len(stories) < 20:
+    while len(stories) < 50:
         time.sleep(1)
         story_els = driver.find_elements_by_css_selector("[data-testid=fbfeed_story]")
         driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight);")
         for el in story_els:
             if get_id(el) not in [x["id"] for x in stories]:
+                print("new story")
                 story = get_story(el)
                 stories.append(story)
                 print(story)
-    with open(user + '.json', 'w') as f:
+    stories = list(map(get_content, stories))
+
+    fname = re.sub('[^a-zA-Z0-9 \n\.]', '_', user)
+    with open(fname + '.json', 'w') as f:
         f.write(json.dumps(stories))
 
 
     driver.close()
-
-redirectdriver.close()
