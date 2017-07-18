@@ -44,24 +44,23 @@ def get_headline(el):
         return False
 
 def get_article(link):
+    if("facebook.com" in link):
+        return
     params = urllib.parse.urlencode({ "url": link })
     req = urllib.request.Request("https://mercury.postlight.com/parser?%s"
             % params)
     req.add_header("x-api-key", config['MERCURY_API_KEY'])
-    try:
-        data = json.loads(urllib.request.urlopen(req).read())
-    except urllib.error.HTTPError:
-        return False
+    data = json.loads(urllib.request.urlopen(req).read())
+    print(data)
     soup = BeautifulSoup(data["content"], "html.parser")
-    content = soup.get_text().strip()
-    content = re.sub(r'\n\s*\n', r'\r', content,flags=re.M)
-    return content
+    data['content'] = soup.get_text().strip()
+    return data;
 
 def get_id(el):
     return el.get_attribute("id")
 
 def get_link(el):
-    fblink = False
+    fblink = ''
     try:
         link = el.find_element_by_css_selector(".mtm a").get_attribute("href")
         if link[0] == "/":
@@ -73,22 +72,18 @@ def get_link(el):
 
     return fblink
 
-def resolve_link(fblink, driver):
-    try:
-        body = driver.find_element_by_tag_name('body')
-        driver.get(fblink)
-        wait = WebDriverWait(driver, 5)
-        body = wait.until(EC.staleness_of(body))
-    except Exception as e:
-        print(e)
+def resolve_link(story, driver):
+    driver.get(story['link'])
+    time.sleep(2)
     url = driver.current_url
+    story['orig_link'] = url
     params = urllib.parse.urlencode({
         "apiKey": config['BITLY_API_KEY'],
         "login": config['BITLY_LOGIN'],
         "longUrl": url
         })
     req = urllib.request.urlopen("http://api.bitly.com/v3/shorten?%s" % params)
-    return json.loads(req.read())["data"]["url"]
+    story['link'] = json.loads(req.read())["data"]["url"]
 
 def get_image(el):
     try:
@@ -110,16 +105,21 @@ def get_story(el):
         "image": get_image(el),
         "deck": get_deck(el),
         "link": get_link(el),
-        "source": get_source(el)
+        "orig_link": False,
+        "source": get_source(el),
+        "story": False
     }
     return ret;
 
 driver = False;
 def get_content(story):
-    link = resolve_link(story['link'], driver)
-    print(link)
-    story['link'] = link
-    story['story'] = link and get_article(link)
+    try:
+        resolve_link(story, driver)
+    except Exception as e:
+        print(e)
+    if(story['orig_link']):
+        article = get_article(story['orig_link'])
+        story['story'] =  article and article['content']
     return story
 
 for user, password in users.items():
