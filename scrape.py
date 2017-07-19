@@ -54,8 +54,11 @@ def get_article(link):
     req.add_header("x-api-key", config['MERCURY_API_KEY'])
     data = json.loads(urllib.request.urlopen(req).read())
     soup = BeautifulSoup(data["content"], "html.parser")
-    data['content'] = soup.get_text().strip()
-    print(data['title'])
+    content = ""
+    for string in soup.stripped_strings:
+        content += string + "\r";
+    data['content'] = content.strip()
+    print(data['content'])
     return data;
 
 def get_id(el):
