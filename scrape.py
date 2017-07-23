@@ -6,6 +6,7 @@ from selenium.common import exceptions as EX
 from selenium.webdriver.common.keys import Keys
 from multiprocessing import Pool
 from bs4 import BeautifulSoup
+from wand.image import Image
 import pickle
 import logging
 import time
@@ -98,6 +99,10 @@ def get_image(el):
         src = el.find_element_by_css_selector(".mtm img").get_attribute("src")
         loc = "%s/img/%s.jpg" % (os.getcwd(), time.time())
         urllib.request.urlretrieve(src, loc)
+        with Image(filename=loc) as img:
+            img.type = "grayscale"
+            img.gamma(1.7)
+            img.save(filename=loc)
         return loc
     except EX.NoSuchElementException:
         pass
@@ -143,19 +148,28 @@ def scrape_user(user_num):
     story_els = []
     stories = []
     failures = 0
-    last_pos = 0
+    selector = "data-insertion-position"
+    try:
+        last_pos = int(driver.find_element_by_css_selector('[aria-posinset]').get_attribute('aria-posinset')) + 1
+        selector = "aria-posinset"
+    except EX.NoSuchElementException:
+        last_pos = int(driver.find_element_by_css_selector('[%s]' % selector).get_attribute(selector)) + 1
+
     while len(stories) < 100 and failures < 100:
         time.sleep(1)
         try:
-            el = driver.find_element_by_css_selector('[aria-posinset="%i"]' % (last_pos + 1))
+            el = driver.find_element_by_css_selector('[%s="%i"]' % (selector, last_pos + 1))
             story = get_story(el)
             stories.append(story)
             print(last_pos + 1)
             print(story['source'])
             last_pos += 1
             failures = 0
-        except EX.NoSuchElementException:
+        except EX.NoSuchElementException as e:
+            print(e)
             failures += 1
+            if(failures > 10):
+                selector = "data-insertion-position"
             print('retry %i' % failures)
             driver.execute_script("window.scrollTo(0, document.documentElement.scrollTop + window.outerHeight/2);")
             continue
@@ -167,6 +181,9 @@ def scrape_user(user_num):
 
     driver.close()
 
-with Pool(5) as p:
-    users = [int(os.path.splitext(os.path.basename(f))[0]) for f in os.listdir("cookies")]
-    p.map(scrape_user, users)
+if(len(sys.argv) > 1):
+    scrape_user(int(sys.argv[1]))
+else:
+    with Pool(5) as p:
+        users = [int(os.path.splitext(os.path.basename(f))[0]) for f in os.listdir("cookies")]
+        p.map(scrape_user, users)
